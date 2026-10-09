@@ -58,10 +58,10 @@ class NotificationServiceTest(TestCase):
             template_text="Hola {{ user_name }}, esto es una prueba.",
         )
 
-    @patch("notifications.services.send_mail")
+    @patch("notifications.providers.smtp.EmailMultiAlternatives.send")
     def test_send_email_notification(self, mock_send_mail):
         """Test de envío de notificación por email"""
-        from notifications.services import EmailNotificationService
+        from notifications.services.email_service import EmailNotificationService
 
         mock_send_mail.return_value = 1
 
@@ -80,7 +80,7 @@ class NotificationServiceTest(TestCase):
 
     def test_notification_repository_methods(self):
         """Test de métodos del repositorio"""
-        from notifications.repositories import NotificationRepository
+        from notifications.repositories.notification_repository import NotificationRepository
 
         # Crear notificación
         notification = Notification.objects.create(

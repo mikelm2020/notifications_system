@@ -114,3 +114,9 @@ media/
 # !**/migrations
 # !**/migrations/__init__.py
 .python-version
+# Local secrets and tooling
+.env.*
+!.env.example
+.pytest_cache/
+.ruff_cache/
+.tmp/
