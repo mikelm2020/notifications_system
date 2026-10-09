@@ -7,7 +7,6 @@ email_strategy.py - Estrategia para canal de Email.
 """
 
 import logging
-from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
 from django.conf import settings
@@ -28,12 +27,12 @@ class EmailChannelStrategy(NotificationChannelStrategy):
 
     def __init__(self, provider: Optional[SMTPProvider] = None, from_email: Optional[str] = None):
         super().__init__(provider)
-        self.from_email = from_email or getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@example.com")
+        self.from_email = from_email or getattr(
+            settings, "DEFAULT_FROM_EMAIL", "noreply@example.com"
+        )
 
     def prepare_content(
-        self,
-        email_template: EmailTemplate,
-        context: Dict[str, Any]
+        self, email_template: EmailTemplate, context: Dict[str, Any]
     ) -> EmailContent:
         """
         Prepara el contenido del email usando Django templates.
@@ -115,5 +114,5 @@ class EmailChannelStrategy(NotificationChannelStrategy):
 
         except Exception as e:
             logger.error(f"Error enviando email {notification.uuid}: {str(e)}")
-            notification.error_message = str(e)
+            self.record_send_error(notification, e)
             return False

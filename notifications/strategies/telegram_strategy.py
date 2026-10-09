@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class TelegramContent:
     """Contenido para notificación Telegram."""
+
     message: str
     parse_mode: str = "HTML"
     disable_preview: bool = False
@@ -34,9 +35,7 @@ class TelegramChannelStrategy(NotificationChannelStrategy):
     provider_class = TelegramProvider
 
     def prepare_content(
-        self,
-        template: TelegramTemplate,
-        context: Dict[str, Any]
+        self, template: TelegramTemplate, context: Dict[str, Any]
     ) -> TelegramContent:
         """
         Prepara el contenido de Telegram.
@@ -76,6 +75,7 @@ class TelegramChannelStrategy(NotificationChannelStrategy):
         if notification.user_id:
             try:
                 from notifications.models import UserExternalAccount
+
                 account = UserExternalAccount.objects.filter(
                     user=notification.user_id,
                     account_type="telegram",
@@ -133,5 +133,5 @@ class TelegramChannelStrategy(NotificationChannelStrategy):
 
         except Exception as e:
             logger.error(f"Error enviando a Telegram {notification.uuid}: {str(e)}")
-            notification.error_message = str(e)
+            self.record_send_error(notification, e)
             return False

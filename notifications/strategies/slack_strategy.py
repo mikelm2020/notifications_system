@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SlackContent:
     """Contenido para notificación Slack."""
+
     message: str
     channel: str
     blocks: Optional[List[Dict]] = None
@@ -33,11 +34,7 @@ class SlackChannelStrategy(NotificationChannelStrategy):
     channel_name = "slack"
     provider_class = SlackProvider
 
-    def prepare_content(
-        self,
-        template: SlackTemplate,
-        context: Dict[str, Any]
-    ) -> SlackContent:
+    def prepare_content(self, template: SlackTemplate, context: Dict[str, Any]) -> SlackContent:
         """
         Prepara el contenido de Slack.
 
@@ -83,6 +80,7 @@ class SlackChannelStrategy(NotificationChannelStrategy):
         if notification.user_id:
             try:
                 from notifications.models import UserExternalAccount
+
                 account = UserExternalAccount.objects.filter(
                     user=notification.user_id,
                     account_type="slack",
@@ -111,13 +109,13 @@ class SlackChannelStrategy(NotificationChannelStrategy):
 
             # Determinar destinatario
             recipient = content.channel or self.get_recipient(
-                notification,
-                notification.context_data or {}
+                notification, notification.context_data or {}
             )
 
             if not recipient:
                 # Usar canal por defecto de la configuración
                 from notifications.conf import notifications_config
+
                 provider_config = notifications_config.get_provider_config("slack")
                 recipient = provider_config.get("default_channel") if provider_config else None
 
@@ -163,5 +161,5 @@ class SlackChannelStrategy(NotificationChannelStrategy):
 
         except Exception as e:
             logger.error(f"Error enviando a Slack {notification.uuid}: {str(e)}")
-            notification.error_message = str(e)
+            self.record_send_error(notification, e)
             return False

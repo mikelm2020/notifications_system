@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PushContent:
     """Contenido para notificación Push."""
+
     title: str
     body: str
     icon: Optional[str] = None
@@ -34,11 +35,7 @@ class PushFCMChannelStrategy(NotificationChannelStrategy):
     channel_name = "push_fcm"
     provider_class = FCMProvider
 
-    def prepare_content(
-        self,
-        template: PushTemplate,
-        context: Dict[str, Any]
-    ) -> PushContent:
+    def prepare_content(self, template: PushTemplate, context: Dict[str, Any]) -> PushContent:
         """
         Prepara el contenido del Push.
 
@@ -128,7 +125,7 @@ class PushFCMChannelStrategy(NotificationChannelStrategy):
                 if response.success:
                     notification.external_id = response.message_id
                 else:
-                    notification.error_message = response.error_message
+                    self.update_notification_from_response(notification, response)
                     # Desactivar token si es inválido
                     if response.error_code in ["INVALID_TOKEN", "UNREGISTERED"]:
                         self._deactivate_token(tokens[0])
@@ -137,6 +134,12 @@ class PushFCMChannelStrategy(NotificationChannelStrategy):
                 results = provider.send_multicast(tokens, push_content)
                 success_count = sum(1 for r in results.values() if r.success)
                 success = success_count > 0
+
+                if not success:
+                    for result in results.values():
+                        self.update_notification_from_response(notification, result)
+                        if result.error_code == "DELIVERY_UNKNOWN":
+                            break
 
                 # Desactivar tokens inválidos
                 for token, result in results.items():
@@ -158,7 +161,7 @@ class PushFCMChannelStrategy(NotificationChannelStrategy):
 
         except Exception as e:
             logger.error(f"Error enviando Push FCM {notification.uuid}: {str(e)}")
-            notification.error_message = str(e)
+            self.record_send_error(notification, e)
             return False
 
     def _deactivate_token(self, token: str):

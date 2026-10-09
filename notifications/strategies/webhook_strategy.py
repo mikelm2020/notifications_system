@@ -9,7 +9,7 @@ webhook_strategy.py - Estrategia para notificaciones via Webhook.
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import httpx
 
@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WebhookContent:
     """Contenido para notificación Webhook."""
+
     url: str
     method: str
     headers: Dict[str, str]
@@ -39,11 +40,7 @@ class WebhookChannelStrategy(NotificationChannelStrategy):
     channel_name = "webhook"
     provider_class = None  # Usa httpx directamente
 
-    def prepare_content(
-        self,
-        template: WebhookTemplate,
-        context: Dict[str, Any]
-    ) -> WebhookContent:
+    def prepare_content(self, template: WebhookTemplate, context: Dict[str, Any]) -> WebhookContent:
         """
         Prepara el contenido del Webhook.
 
@@ -62,7 +59,7 @@ class WebhookChannelStrategy(NotificationChannelStrategy):
         try:
             payload = json.loads(payload_str)
         except json.JSONDecodeError:
-            logger.warning(f"Payload no es JSON válido, usando como string")
+            logger.warning("Payload no es JSON válido, usando como string")
             payload = {"data": payload_str}
 
         # Renderizar headers
@@ -152,16 +149,16 @@ class WebhookChannelStrategy(NotificationChannelStrategy):
         except httpx.TimeoutException:
             logger.error(f"Timeout en webhook {content.url} después de {content.timeout}s")
             notification.error_message = f"Timeout después de {content.timeout} segundos"
-            notification.error_code = "TIMEOUT"
+            notification.error_code = "DELIVERY_UNKNOWN"
             return False
 
         except httpx.ConnectError as e:
             logger.error(f"Error de conexión al webhook {content.url}: {e}")
             notification.error_message = f"Error de conexión: {str(e)}"
-            notification.error_code = "CONNECTION_ERROR"
+            notification.error_code = "DELIVERY_UNKNOWN"
             return False
 
         except Exception as e:
             logger.error(f"Error enviando webhook {notification.uuid}: {str(e)}")
-            notification.error_message = str(e)
+            self.record_send_error(notification, e)
             return False
