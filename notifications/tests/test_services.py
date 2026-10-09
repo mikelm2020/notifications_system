@@ -93,6 +93,8 @@ class NotificationServiceTest(TestCase):
         self.assertEqual(found.id, notification.id)
 
         # Test mark_as_sent
+        self.assertTrue(NotificationRepository.claim_for_send(notification))
+        self.assertTrue(NotificationRepository.begin_dispatch(notification))
         NotificationRepository.mark_as_sent(notification)
         notification.refresh_from_db()
         self.assertEqual(notification.status, Notification.Status.SENT)

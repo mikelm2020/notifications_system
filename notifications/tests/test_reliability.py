@@ -207,7 +207,7 @@ class ReliabilityTests(TestCase):
         self.strategy.send.return_value = False
         send_notification_async.push_request(retries=notifications_config.max_retries)
         self.addCleanup(send_notification_async.pop_request)
-        with patch("notifications.signals.notification_failed_permanently.send") as signal:
+        with patch("notifications.signals.notification_failed_permanently.send_robust") as signal:
             with self.assertRaises(Exception):
                 send_notification_async.run(self.data)
         signal.assert_called_once()
@@ -344,7 +344,7 @@ class ReliabilityTests(TestCase):
         self.age(n)
         with (
             patch.object(send_notification_async, "retry") as retry,
-            patch("notifications.signals.notification_failed_permanently.send") as signal,
+            patch("notifications.signals.notification_failed_permanently.send_robust") as signal,
         ):
             with self.assertRaises(Exception):
                 send_notification_async.run(self.data)

@@ -15,7 +15,7 @@ from celery import shared_task
 from django.utils import timezone
 
 from notifications.conf import notifications_config
-from notifications.exceptions import ChannelSendError
+from notifications.exceptions import AMBIGUOUS_DELIVERY_CODES, ChannelSendError
 from notifications.models import Notification
 
 logger = logging.getLogger(__name__)
@@ -47,21 +47,31 @@ def send_notification_async(self, notification_data_dict: Dict):
     if not notification_data_dict.get("uuid"):
         notification_data_dict["uuid"] = _delivery_uuid(self.request.id)
     exhausted = False
+    notifications = []
+    service = None
     try:
         notification_data = NotificationData(**notification_data_dict)
         service = NotificationService()
 
         notifications = service.create_and_send_notification(notification_data)
 
-        failed = [n for n in notifications if n.status == Notification.Status.FAILED]
+        failed = [
+            n
+            for n in notifications
+            if n.status == Notification.Status.FAILED
+            and n.error_code not in AMBIGUOUS_DELIVERY_CODES
+        ]
         if failed:
-            exhausted = all(n.retry_count >= max_retries for n in failed)
+            exhausted = all(
+                n.failed_permanently_at is not None or n.retry_count >= max_retries for n in failed
+            )
             raise ChannelSendError(
                 failed[0].channel_id.name, failed[0].error_message or "Send failed"
             )
 
         return {
-            "success": all(
+            "success": bool(notifications)
+            and all(
                 n.status
                 in (
                     Notification.Status.SENT,
@@ -86,14 +96,10 @@ def send_notification_async(self, notification_data_dict: Dict):
                 kwargs={"notification_data_dict": notification_data_dict},
             )
         else:
-            # Emitir signal de fallo permanente
-            from notifications.signals import notification_failed_permanently
-
-            notification_failed_permanently.send(
-                sender=self.__class__,
-                notification_data=notification_data_dict,
-                error=exc,
-            )
+            if service is not None:
+                for notification in notifications:
+                    if notification.status == Notification.Status.FAILED:
+                        service.finalize_failure(notification, notification_data_dict)
             raise
 
 
@@ -245,12 +251,17 @@ def retry_failed_notifications():
     max_retry_count = notifications_config.max_retries
     retry_window = timezone.now() - timedelta(hours=24)
 
-    failed_notifications = Notification.objects.filter(
-        status=Notification.Status.FAILED,
-        retry_count__lt=max_retry_count,
-        created_at__gte=retry_window,
-        updated_at__lte=timezone.now() - timedelta(seconds=notifications_config.retry_delay),
-    ).select_related("notification_type_id", "channel_id")
+    failed_notifications = (
+        Notification.objects.filter(
+            status=Notification.Status.FAILED,
+            failed_permanently_at__isnull=True,
+            retry_count__lt=max_retry_count,
+            created_at__gte=retry_window,
+            updated_at__lte=timezone.now() - timedelta(seconds=notifications_config.retry_delay),
+        )
+        .exclude(error_code__in=AMBIGUOUS_DELIVERY_CODES)
+        .select_related("notification_type_id", "channel_id")
+    )
 
     service = NotificationService()
     success_count = 0
@@ -371,7 +382,7 @@ def send_batch_notifications(self, notification_data_list: List[Dict]):
                 data_dict["uuid"] = str(uuid.uuid5(uuid.UUID(batch_uuid), str(index)))
             notification_data = NotificationData(**data_dict)
             notifications = service.create_and_send_notification(notification_data)
-            if any(
+            if not notifications or any(
                 n.status
                 not in (
                     Notification.Status.SENT,

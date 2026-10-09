@@ -557,6 +557,18 @@ class Notification(Traceable):
         default=0,
     )
 
+    dispatch_started_at = models.DateTimeField(
+        _("Inicio de llamada al proveedor"),
+        null=True,
+        blank=True,
+    )
+    failed_permanently_at = models.DateTimeField(
+        _("Fallo permanente"),
+        null=True,
+        blank=True,
+        db_index=True,
+    )
+
     # Programación
     scheduled_for = models.DateTimeField(
         _("Programado para"),

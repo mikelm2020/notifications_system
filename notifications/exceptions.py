@@ -19,6 +19,7 @@ class NotificationError(Exception):
 
 # === Errores de Configuración ===
 
+
 class ConfigurationError(NotificationError):
     """Error de configuración de la app."""
 
@@ -32,7 +33,7 @@ class ChannelNotEnabledError(ConfigurationError):
     def __init__(self, channel_name: str):
         super().__init__(
             f"El canal '{channel_name}' no está habilitado en NOTIFICATIONS_CONFIG",
-            {"channel": channel_name}
+            {"channel": channel_name},
         )
 
 
@@ -44,12 +45,12 @@ class ProviderNotConfiguredError(ConfigurationError):
         if missing_fields:
             details["missing_fields"] = missing_fields
         super().__init__(
-            f"El proveedor '{provider_name}' no está configurado correctamente",
-            details
+            f"El proveedor '{provider_name}' no está configurado correctamente", details
         )
 
 
 # === Errores de Canal ===
+
 
 class ChannelError(NotificationError):
     """Error relacionado con un canal de notificación."""
@@ -67,7 +68,19 @@ class ChannelNotFoundError(ChannelError):
         super().__init__(
             f"Canal no encontrado: {channel_name}",
             channel_name,
-            {"available_channels": ["email", "in_app", "sms", "push_fcm", "push_web", "whatsapp", "slack", "telegram", "webhook"]}
+            {
+                "available_channels": [
+                    "email",
+                    "in_app",
+                    "sms",
+                    "push_fcm",
+                    "push_web",
+                    "whatsapp",
+                    "slack",
+                    "telegram",
+                    "webhook",
+                ]
+            },
         )
 
 
@@ -78,14 +91,11 @@ class ChannelSendError(ChannelError):
         details = {"reason": reason}
         if original_error:
             details["original_error"] = str(original_error)
-        super().__init__(
-            f"Error enviando por canal {channel}: {reason}",
-            channel,
-            details
-        )
+        super().__init__(f"Error enviando por canal {channel}: {reason}", channel, details)
 
 
 # === Errores de Template ===
+
 
 class TemplateError(NotificationError):
     """Error relacionado con templates."""
@@ -100,7 +110,7 @@ class TemplateNotFoundError(TemplateError):
     def __init__(self, notification_type: str, channel: str):
         super().__init__(
             f"No hay template de {channel} para: {notification_type}",
-            {"notification_type": notification_type, "channel": channel}
+            {"notification_type": notification_type, "channel": channel},
         )
 
 
@@ -110,11 +120,12 @@ class TemplateRenderError(TemplateError):
     def __init__(self, template_name: str, error: str):
         super().__init__(
             f"Error renderizando template '{template_name}': {error}",
-            {"template": template_name, "error": error}
+            {"template": template_name, "error": error},
         )
 
 
 # === Errores de Notificación ===
+
 
 class NotificationTypeNotFoundError(NotificationError):
     """Tipo de notificación no encontrado."""
@@ -123,7 +134,7 @@ class NotificationTypeNotFoundError(NotificationError):
         super().__init__(
             f"Tipo de notificación no encontrado: {event_code}",
             "NOTIFICATION_TYPE_NOT_FOUND",
-            {"event_code": event_code}
+            {"event_code": event_code},
         )
 
 
@@ -134,7 +145,7 @@ class NotificationNotFoundError(NotificationError):
         super().__init__(
             f"Notificación no encontrada: {identifier}",
             "NOTIFICATION_NOT_FOUND",
-            {"identifier": identifier}
+            {"identifier": identifier},
         )
 
 
@@ -145,11 +156,12 @@ class NoChannelsConfiguredError(NotificationError):
         super().__init__(
             f"No hay canales configurados para: {notification_type}",
             "NO_CHANNELS_CONFIGURED",
-            {"notification_type": notification_type}
+            {"notification_type": notification_type},
         )
 
 
 # === Errores de Proveedor ===
+
 
 class ProviderError(NotificationError):
     """Error de proveedor externo."""
@@ -164,11 +176,7 @@ class ProviderConnectionError(ProviderError):
     """Error de conexión con proveedor."""
 
     def __init__(self, provider: str, error: str):
-        super().__init__(
-            provider,
-            f"Error de conexión con {provider}: {error}",
-            {"error": error}
-        )
+        super().__init__(provider, f"Error de conexión con {provider}: {error}", {"error": error})
 
 
 class ProviderAuthenticationError(ProviderError):
@@ -188,11 +196,7 @@ class ProviderRateLimitError(ProviderError):
         details = {}
         if retry_after:
             details["retry_after_seconds"] = retry_after
-        super().__init__(
-            provider,
-            f"Rate limit alcanzado en {provider}",
-            details
-        )
+        super().__init__(provider, f"Rate limit alcanzado en {provider}", details)
 
 
 class ProviderQuotaExceededError(ProviderError):
@@ -206,6 +210,7 @@ class ProviderQuotaExceededError(ProviderError):
 
 
 # === Errores de Validación ===
+
 
 class ValidationError(NotificationError):
     """Error de validación de datos."""
@@ -225,9 +230,7 @@ class InvalidRecipientError(ValidationError):
         if reason:
             message += f" ({reason})"
         super().__init__(
-            message,
-            "recipient",
-            {"recipient": recipient, "channel": channel, "reason": reason}
+            message, "recipient", {"recipient": recipient, "channel": channel, "reason": reason}
         )
 
 
@@ -238,11 +241,12 @@ class InvalidContextError(ValidationError):
         super().__init__(
             f"Faltan variables en el contexto: {', '.join(missing_keys)}",
             "context",
-            {"missing_keys": missing_keys}
+            {"missing_keys": missing_keys},
         )
 
 
 # === Errores de Rate Limiting ===
+
 
 class RateLimitError(NotificationError):
     """Error de rate limiting interno."""
@@ -257,13 +261,12 @@ class RateLimitError(NotificationError):
             details["retry_after_seconds"] = retry_after
 
         super().__init__(
-            "Límite de envío alcanzado. Intenta más tarde.",
-            "RATE_LIMIT_EXCEEDED",
-            details
+            "Límite de envío alcanzado. Intenta más tarde.", "RATE_LIMIT_EXCEEDED", details
         )
 
 
 # === Errores de Dispositivo ===
+
 
 class DeviceError(NotificationError):
     """Error relacionado con dispositivos (para Push)."""
@@ -279,10 +282,7 @@ class DeviceTokenInvalidError(DeviceError):
         details = {"token_prefix": token[:10] + "..." if len(token) > 10 else token}
         if platform:
             details["platform"] = platform
-        super().__init__(
-            "Token de dispositivo inválido o expirado",
-            details
-        )
+        super().__init__("Token de dispositivo inválido o expirado", details)
 
 
 class DeviceNotRegisteredError(DeviceError):
@@ -290,6 +290,41 @@ class DeviceNotRegisteredError(DeviceError):
 
     def __init__(self, user_id: int):
         super().__init__(
-            "Usuario no tiene dispositivos registrados para Push",
-            {"user_id": user_id}
+            "Usuario no tiene dispositivos registrados para Push", {"user_id": user_id}
         )
+
+
+AMBIGUOUS_DELIVERY_CODES = (
+    "DELIVERY_UNKNOWN",
+    "TIMEOUT",
+    "TimeoutError",
+    "Timeout",
+    "ReadTimeout",
+    "WriteTimeout",
+    "ConnectTimeout",
+    "ReadTimeoutError",
+    "SMTPServerDisconnected",
+    "CONNECTION_ERROR",
+    "ConnectionError",
+    "ConnectionResetError",
+    "ProtocolError",
+    "RemoteProtocolError",
+)
+
+
+def is_ambiguous_delivery_error(error: Exception) -> bool:
+    """Transport failures can happen after remote acceptance: do not replay them."""
+    from smtplib import SMTPServerDisconnected
+
+    import httpx
+
+    if isinstance(
+        error, (TimeoutError, ConnectionError, SMTPServerDisconnected, httpx.TransportError)
+    ):
+        return True
+    # Optional SDKs use requests/urllib3 without requiring those extras here.
+    return any(
+        cls.__module__.startswith(("requests", "urllib3", "httpcore"))
+        and cls.__name__ in ("Timeout", "ReadTimeoutError", "ProtocolError", "ConnectionError")
+        for cls in type(error).__mro__
+    )

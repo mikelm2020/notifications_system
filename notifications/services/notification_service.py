@@ -18,6 +18,7 @@ from notifications.exceptions import (
     NoChannelsConfiguredError,
     NotificationTypeNotFoundError,
     TemplateNotFoundError,
+    is_ambiguous_delivery_error,
 )
 from notifications.factories.channel_factory import NotificationChannelFactory
 from notifications.models import (
@@ -108,6 +109,29 @@ class NotificationService:
 
         # Paso 1: Validar tipo de notificación
         notification_type = self._validate_notification_type(notification_data.event_code)
+
+        # A retry must retain the original delivery set, even if preferences changed.
+        existing = (
+            list(
+                Notification.objects.filter(uuid=notification_data.uuid).select_related(
+                    "channel_id",
+                    "notification_type_id",
+                )
+            )
+            if notification_data.uuid
+            else []
+        )
+        if existing:
+            if any(
+                n.notification_type_id_id != notification_type.pk
+                or n.user_id_id != notification_data.user_id
+                for n in existing
+            ):
+                raise ValueError("Notification UUID already belongs to another event or user")
+            for notification in existing:
+                if not notification.scheduled_for:
+                    self._send_notification(notification, notification.context_data)
+            return existing
 
         # Paso 2: Obtener canales
         if channels:
@@ -235,6 +259,9 @@ class NotificationService:
         """Envía una notificación usando la estrategia apropiada."""
         from notifications.signals import notification_post_send, notification_pre_send
 
+        if not self._recipient_enabled(notification):
+            self.notification_repo.cancel(notification, "User disabled this channel")
+            return False
         if not self.notification_repo.claim_for_send(notification):
             return False
 
@@ -262,13 +289,21 @@ class NotificationService:
                 content=content,
             )
 
-            # Enviar
+            # Recheck after pre-send hooks. No row lock is held during provider I/O.
+            if not self._recipient_enabled(notification):
+                self.notification_repo.cancel(notification, "User disabled this channel")
+                return False
+            if not self.notification_repo.begin_dispatch(notification):
+                return False
             success = strategy.send(notification, content)
 
         except Exception as e:
             logger.exception("Error procesando notificación %s", notification.uuid)
             notification.error_message = str(e)
-            self.notification_repo.mark_as_failed(notification)
+            if notification.dispatch_started_at is not None and is_ambiguous_delivery_error(e):
+                self.notification_repo.mark_as_unknown(notification)
+            else:
+                self.notification_repo.mark_as_failed(notification)
             success = False
 
         else:
@@ -276,8 +311,16 @@ class NotificationService:
             # Automatically retrying that unknown outcome could send twice.
             if success:
                 self.notification_repo.mark_as_sent(notification)
+            elif notification.error_code == "DELIVERY_UNKNOWN":
+                self.notification_repo.mark_as_unknown(notification)
             else:
                 self.notification_repo.mark_as_failed(notification)
+
+        if (
+            notification.status == Notification.Status.FAILED
+            and notification.retry_count >= notifications_config.max_retries
+        ):
+            self.finalize_failure(notification)
 
         # Observer failures must never turn a confirmed send into a retriable failure.
         notification_post_send.send_robust(
@@ -286,6 +329,28 @@ class NotificationService:
             success=success,
         )
         return True
+
+    def _recipient_enabled(self, notification):
+        if not notification.user_id_id:
+            return True
+        return bool(
+            self._filter_by_user_preferences(
+                notification.user_id_id,
+                notification.notification_type_id,
+                [notification.channel_id],
+            )
+        )
+
+    def finalize_failure(self, notification, notification_data=None):
+        if self.notification_repo.finalize_failure(notification):
+            from notifications.signals import notification_failed_permanently
+
+            notification_failed_permanently.send_robust(
+                sender=self.__class__,
+                notification=notification,
+                notification_data=notification_data,
+                error=RuntimeError(notification.error_message or "Retry budget exhausted"),
+            )
 
     def _get_template_for_channel(self, notification_type: NotificationType, channel_name: str):
         """Obtiene el template apropiado según el canal."""

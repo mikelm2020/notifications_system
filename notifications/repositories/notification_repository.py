@@ -9,6 +9,7 @@ from django.db.models import Case, F, Q, Value, When
 from django.utils import timezone
 
 from notifications.conf import notifications_config
+from notifications.exceptions import AMBIGUOUS_DELIVERY_CODES
 from notifications.models import Notification
 
 from .base_repository import BaseRepositoryBuilder
@@ -54,48 +55,106 @@ class NotificationRepository(BaseRepositoryBuilder):
         """Compare-and-update: only one worker can claim a due record."""
         now = timezone.now()
         due = Q(scheduled_for__isnull=True) | Q(scheduled_for__lte=now)
-        rows = Notification.objects.filter(pk=notification.pk).filter(due)
+        rows = Notification.objects.filter(
+            pk=notification.pk,
+            failed_permanently_at__isnull=True,
+        ).filter(due)
         claimed = rows.filter(
             status__in=[Notification.Status.PENDING, Notification.Status.QUEUED]
-        ).update(status=Notification.Status.SENDING, updated_at=now)
+        ).update(
+            status=Notification.Status.SENDING,
+            updated_at=now,
+            dispatch_started_at=None,
+            error_message="",
+            error_code="",
+        )
         if not claimed:
-            claimed = rows.filter(
-                status=Notification.Status.FAILED,
-                retry_count__lt=notifications_config.max_retries,
-                updated_at__lte=now - timedelta(seconds=notifications_config.retry_delay),
-            ).update(
-                status=Notification.Status.SENDING, retry_count=F("retry_count") + 1, updated_at=now
+            claimed = (
+                rows.filter(
+                    status=Notification.Status.FAILED,
+                    retry_count__lt=notifications_config.max_retries,
+                    updated_at__lte=now - timedelta(seconds=notifications_config.retry_delay),
+                )
+                .exclude(error_code__in=AMBIGUOUS_DELIVERY_CODES)
+                .update(
+                    status=Notification.Status.SENDING,
+                    retry_count=F("retry_count") + 1,
+                    updated_at=now,
+                    dispatch_started_at=None,
+                    error_message="",
+                    error_code="",
+                )
             )
         notification.refresh_from_db()
         return bool(claimed)
 
     @classmethod
-    def mark_as_sent(cls, notification: Notification) -> Notification:
-        # Conditional updates avoid overwriting cancellation/read changes or stale state.
-        Notification.objects.filter(
+    def begin_dispatch(cls, notification: Notification) -> bool:
+        """Linearization point: cancellation wins until this committed UPDATE."""
+        started = timezone.now()
+        updated = Notification.objects.filter(
             pk=notification.pk,
+            status=Notification.Status.SENDING,
+            dispatch_started_at__isnull=True,
+            failed_permanently_at__isnull=True,
+        ).update(dispatch_started_at=started, updated_at=started)
+        notification.refresh_from_db()
+        return bool(updated)
+
+    @classmethod
+    def cancel(cls, notification: Notification, reason="Cancelled") -> bool:
+        before_dispatch = Q(
             status__in=[
-                Notification.Status.SENDING,
                 Notification.Status.PENDING,
-            ],
-        ).update(
-            status=Case(
-                When(is_read=True, then=Value(Notification.Status.READ)),
-                default=Value(Notification.Status.SENT),
-            ),
-            sent_at=timezone.now(),
-            updated_at=timezone.now(),
-            external_id=notification.external_id,
-            rendered_content=notification.rendered_content,
-            error_message="",
-            error_code="",
+                Notification.Status.QUEUED,
+                Notification.Status.FAILED,
+            ]
+        ) | Q(status=Notification.Status.SENDING, dispatch_started_at__isnull=True)
+        updated = (
+            Notification.objects.filter(
+                pk=notification.pk,
+                failed_permanently_at__isnull=True,
+            )
+            .filter(before_dispatch)
+            .update(
+                status=Notification.Status.CANCELLED,
+                error_message=reason,
+                updated_at=timezone.now(),
+            )
         )
+        notification.refresh_from_db()
+        return bool(updated)
+
+    @classmethod
+    def _owned_dispatch(cls, notification):
+        return Notification.objects.filter(
+            pk=notification.pk,
+            status=Notification.Status.SENDING,
+            dispatch_started_at=notification.dispatch_started_at,
+        )
+
+    @classmethod
+    def mark_as_sent(cls, notification: Notification) -> Notification:
+        if notification.dispatch_started_at is not None:
+            cls._owned_dispatch(notification).update(
+                status=Case(
+                    When(is_read=True, then=Value(Notification.Status.READ)),
+                    default=Value(Notification.Status.SENT),
+                ),
+                sent_at=timezone.now(),
+                updated_at=timezone.now(),
+                external_id=notification.external_id,
+                rendered_content=notification.rendered_content,
+                recipient_identifier=notification.recipient_identifier,
+                error_message="",
+                error_code="",
+            )
         notification.refresh_from_db()
         return notification
 
     @classmethod
     def mark_as_failed(cls, notification: Notification) -> Notification:
-        Notification.objects.filter(pk=notification.pk, status=Notification.Status.SENDING).update(
+        cls._owned_dispatch(notification).update(
             status=Notification.Status.FAILED,
             updated_at=timezone.now(),
             error_message=notification.error_message,
@@ -105,6 +164,29 @@ class NotificationRepository(BaseRepositoryBuilder):
         )
         notification.refresh_from_db()
         return notification
+
+    @classmethod
+    def mark_as_unknown(cls, notification: Notification) -> Notification:
+        cls._owned_dispatch(notification).update(
+            error_message=notification.error_message,
+            error_code="DELIVERY_UNKNOWN",
+            updated_at=timezone.now(),
+            external_id=notification.external_id,
+            rendered_content=notification.rendered_content,
+        )
+        notification.refresh_from_db()
+        return notification
+
+    @classmethod
+    def finalize_failure(cls, notification: Notification) -> bool:
+        """Persist the terminal decision before emitting the permanent failure signal."""
+        updated = Notification.objects.filter(
+            pk=notification.pk,
+            status=Notification.Status.FAILED,
+            failed_permanently_at__isnull=True,
+        ).update(failed_permanently_at=timezone.now(), updated_at=timezone.now())
+        notification.refresh_from_db()
+        return bool(updated)
 
     @classmethod
     def mark_as_read(cls, notification: Notification) -> Notification:
