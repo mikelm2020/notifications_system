@@ -94,3 +94,9 @@ def __getattr__(name):
     if name in exports:
         return getattr(import_module(exports[name]), name)
     raise AttributeError(name)
+
+
+__all__ = [
+    "notifications_config", "NotificationData", "NotificationService",
+    "send_notification", "send_notification_async", "__version__",
+]
