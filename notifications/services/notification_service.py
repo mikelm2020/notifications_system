@@ -10,6 +10,8 @@ import logging
 import uuid as uuid_lib
 from typing import Any, Dict, List, Optional
 
+from django.db.models import Q as models_Q
+
 from notifications.conf import notifications_config
 from notifications.dtos.notification_data import NotificationData
 from notifications.exceptions import (
@@ -98,15 +100,14 @@ class NotificationService:
         """
         # Emitir signal pre-create
         from notifications.signals import notification_pre_create
+
         notification_pre_create.send(
             sender=self.__class__,
             notification_data=notification_data,
         )
 
         # Paso 1: Validar tipo de notificación
-        notification_type = self._validate_notification_type(
-            notification_data.event_code
-        )
+        notification_type = self._validate_notification_type(notification_data.event_code)
 
         # Paso 2: Obtener canales
         if channels:
@@ -129,6 +130,7 @@ class NotificationService:
 
         # Emitir signal post-create
         from notifications.signals import notification_post_create
+
         for notification in notifications:
             notification_post_create.send(
                 sender=self.__class__,
@@ -156,9 +158,7 @@ class NotificationService:
         self, notification_type: NotificationType
     ) -> List[NotificationChannel]:
         """Obtiene los canales configurados para el tipo."""
-        channels = self.notification_type_repo.get_channels_for_type(
-            notification_type.id
-        )
+        channels = self.notification_type_repo.get_channels_for_type(notification_type.id)
 
         # Filtrar solo canales habilitados en configuración
         enabled_channels = notifications_config.get_enabled_channels()
@@ -184,14 +184,18 @@ class NotificationService:
     ) -> List[NotificationChannel]:
         """Filtra canales según preferencias del usuario."""
         # Obtener preferencias deshabilitadas
-        disabled_prefs = UserNotificationPreference.objects.filter(
-            user_id=user_id,
-            is_enabled=False,
-        ).filter(
-            # Preferencia global del canal O específica del tipo
-            models_Q(notification_type__isnull=True) |
-            models_Q(notification_type=notification_type)
-        ).values_list("channel_id", flat=True)
+        disabled_prefs = (
+            UserNotificationPreference.objects.filter(
+                user_id=user_id,
+                is_enabled=False,
+            )
+            .filter(
+                # Preferencia global del canal O específica del tipo
+                models_Q(notification_type__isnull=True)
+                | models_Q(notification_type=notification_type)
+            )
+            .values_list("channel_id", flat=True)
+        )
 
         # Filtrar canales no deshabilitados
         return [ch for ch in channels if ch.id not in disabled_prefs]
@@ -207,16 +211,22 @@ class NotificationService:
         notification_uuid = notification_data.uuid or str(uuid_lib.uuid4())
 
         for channel in channels:
-            notification = Notification(
-                uuid=notification_uuid,
-                notification_type_id=notification_type,
-                user_id_id=notification_data.user_id,
-                channel_id=channel,
-                status=Notification.Status.PENDING,
-                context_data=notification_data.context,
-                scheduled_for=notification_data.scheduled_for,
+            saved_notification = self.notification_repo.get_or_create_delivery(
+                notification_uuid,
+                channel,
+                defaults={
+                    "notification_type_id": notification_type,
+                    "user_id_id": notification_data.user_id,
+                    "status": Notification.Status.PENDING,
+                    "context_data": notification_data.context,
+                    "scheduled_for": notification_data.scheduled_for,
+                },
             )
-            saved_notification = self.notification_repo.save_record(notification)
+            if (
+                saved_notification.notification_type_id_id != notification_type.pk
+                or saved_notification.user_id_id != notification_data.user_id
+            ):
+                raise ValueError("Notification UUID already belongs to another event or user")
             notifications.append(saved_notification)
 
         return notifications
@@ -225,6 +235,11 @@ class NotificationService:
         """Envía una notificación usando la estrategia apropiada."""
         from notifications.signals import notification_post_send, notification_pre_send
 
+        if not self.notification_repo.claim_for_send(notification):
+            return False
+
+        context = notification.context_data or context
+        strategy = None
         try:
             # Crear estrategia
             strategy = self.channel_factory.create(
@@ -234,8 +249,7 @@ class NotificationService:
 
             # Obtener template
             template = self._get_template_for_channel(
-                notification.notification_type_id,
-                notification.channel_id.name
+                notification.notification_type_id, notification.channel_id.name
             )
 
             # Preparar contenido
@@ -248,34 +262,32 @@ class NotificationService:
                 content=content,
             )
 
-            # Actualizar estado a "enviando"
-            notification.status = Notification.Status.SENDING
-            notification.save(update_fields=["status", "updated_at"])
-
             # Enviar
             success = strategy.send(notification, content)
 
-            # Actualizar estado
+        except Exception as e:
+            logger.exception("Error procesando notificación %s", notification.uuid)
+            notification.error_message = str(e)
+            self.notification_repo.mark_as_failed(notification)
+            success = False
+
+        else:
+            # If persistence fails after provider acceptance, leave SENDING for review.
+            # Automatically retrying that unknown outcome could send twice.
             if success:
                 self.notification_repo.mark_as_sent(notification)
             else:
                 self.notification_repo.mark_as_failed(notification)
 
-            # Emitir signal post-send
-            notification_post_send.send(
-                sender=strategy.__class__,
-                notification=notification,
-                success=success,
-            )
+        # Observer failures must never turn a confirmed send into a retriable failure.
+        notification_post_send.send_robust(
+            sender=strategy.__class__ if strategy is not None else self.__class__,
+            notification=notification,
+            success=success,
+        )
+        return True
 
-        except Exception as e:
-            logger.error(f"Error procesando notificación {notification.uuid}: {str(e)}")
-            notification.error_message = str(e)
-            self.notification_repo.mark_as_failed(notification)
-
-    def _get_template_for_channel(
-        self, notification_type: NotificationType, channel_name: str
-    ):
+    def _get_template_for_channel(self, notification_type: NotificationType, channel_name: str):
         """Obtiene el template apropiado según el canal."""
         channel_name_lower = channel_name.lower()
         template_model = CHANNEL_TEMPLATE_MAP.get(channel_name_lower)
@@ -293,9 +305,7 @@ class NotificationService:
 
         return template
 
-    def get_user_notifications(
-        self, user_id: int, unread_only: bool = False
-    ) -> List[Notification]:
+    def get_user_notifications(self, user_id: int, unread_only: bool = False) -> List[Notification]:
         """Obtiene notificaciones de un usuario."""
         if unread_only:
             return self.notification_repo.get_user_notifications(user_id, is_read=False)
@@ -308,7 +318,3 @@ class NotificationService:
             return False
         self.notification_repo.mark_as_read(notification)
         return True
-
-
-# Importar Q aquí para evitar problemas de import circular
-from django.db.models import Q as models_Q

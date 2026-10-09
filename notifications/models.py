@@ -8,13 +8,14 @@ from django.contrib.auth import get_user_model
 from django.db import models
 from django.utils.translation import gettext as _
 
-
 # ============================================================================
 # BASE MODELS
 # ============================================================================
 
+
 class Traceable(models.Model):
     """Modelo base con campos de auditoría."""
+
     created_at = models.DateTimeField(_("Creado en"), auto_now_add=True)
     updated_at = models.DateTimeField(_("Actualizado en"), auto_now=True)
 
@@ -24,6 +25,7 @@ class Traceable(models.Model):
 
 class BaseTemplate(Traceable):
     """Modelo base para todos los templates de notificación."""
+
     notification_type_id = models.ForeignKey(
         "NotificationType",
         on_delete=models.CASCADE,
@@ -44,8 +46,10 @@ class BaseTemplate(Traceable):
 # CORE MODELS
 # ============================================================================
 
+
 class NotificationCategory(Traceable):
     """Categorías de notificación para organización."""
+
     name = models.CharField(_("Nombre"), max_length=150)
     description = models.CharField(_("Descripción"), max_length=150)
     icon = models.CharField(
@@ -123,6 +127,7 @@ class NotificationChannel(models.Model):
 
 class NotificationType(Traceable):
     """Tipos de notificación con código de evento único."""
+
     category_id = models.ForeignKey(
         NotificationCategory,
         on_delete=models.CASCADE,
@@ -160,6 +165,7 @@ class NotificationType(Traceable):
 
 class NotificationTypeChannels(models.Model):
     """Relación entre tipos de notificación y canales."""
+
     notification_type_id = models.ForeignKey(
         NotificationType,
         on_delete=models.CASCADE,
@@ -194,8 +200,10 @@ class NotificationTypeChannels(models.Model):
 # TEMPLATE MODELS
 # ============================================================================
 
+
 class EmailTemplate(BaseTemplate):
     """Template para notificaciones por email."""
+
     template_name = models.CharField(_("Nombre"), max_length=150)
     template_subject = models.CharField(_("Asunto"), max_length=255)
     template_text = models.TextField(
@@ -218,6 +226,7 @@ class EmailTemplate(BaseTemplate):
 
 class InAppTemplate(BaseTemplate):
     """Template para notificaciones in-app."""
+
     title = models.CharField(_("Título"), max_length=150)
     message = models.TextField(_("Mensaje"))
     icon = models.CharField(
@@ -247,6 +256,7 @@ class InAppTemplate(BaseTemplate):
 
 class SMSTemplate(BaseTemplate):
     """Template para notificaciones SMS."""
+
     message = models.CharField(
         _("Mensaje"),
         max_length=160,
@@ -263,6 +273,7 @@ class SMSTemplate(BaseTemplate):
 
 class PushTemplate(BaseTemplate):
     """Template para notificaciones Push (FCM y Web Push)."""
+
     title = models.CharField(_("Título"), max_length=100)
     body = models.CharField(_("Cuerpo"), max_length=255)
     icon = models.CharField(
@@ -299,6 +310,7 @@ class PushTemplate(BaseTemplate):
 
 class WhatsAppTemplate(BaseTemplate):
     """Template para notificaciones WhatsApp."""
+
     template_sid = models.CharField(
         _("Template SID"),
         max_length=100,
@@ -348,6 +360,7 @@ class WhatsAppTemplate(BaseTemplate):
 
 class SlackTemplate(BaseTemplate):
     """Template para notificaciones Slack."""
+
     message = models.TextField(
         _("Mensaje"),
         help_text=_("Mensaje en formato Slack markdown"),
@@ -375,6 +388,7 @@ class SlackTemplate(BaseTemplate):
 
 class TelegramTemplate(BaseTemplate):
     """Template para notificaciones Telegram."""
+
     message = models.TextField(
         _("Mensaje"),
         help_text=_("Mensaje con formato Markdown o HTML de Telegram"),
@@ -410,6 +424,7 @@ class TelegramTemplate(BaseTemplate):
 
 class WebhookTemplate(BaseTemplate):
     """Template para notificaciones Webhook."""
+
     url = models.URLField(
         _("URL del webhook"),
         help_text=_("URL destino. Soporta variables {{ }}."),
@@ -450,6 +465,7 @@ class WebhookTemplate(BaseTemplate):
 # ============================================================================
 # NOTIFICATION MODEL
 # ============================================================================
+
 
 class Notification(Traceable):
     """Registro de notificaciones enviadas."""
@@ -560,6 +576,11 @@ class Notification(Traceable):
     class Meta:
         verbose_name = _("Notificación")
         verbose_name_plural = _("Notificaciones")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["uuid", "channel_id"], name="notification_uuid_channel_unique"
+            ),
+        ]
         indexes = [
             models.Index(fields=["user_id", "is_read"]),
             models.Index(fields=["status", "channel_id"]),
@@ -576,8 +597,10 @@ class Notification(Traceable):
 # USER PREFERENCES & DEVICES
 # ============================================================================
 
+
 class UserNotificationPreference(Traceable):
     """Preferencias de notificación por usuario y canal."""
+
     user = models.ForeignKey(
         get_user_model(),
         on_delete=models.CASCADE,
@@ -742,8 +765,10 @@ class UserExternalAccount(Traceable):
 # NOTIFICATION LOG
 # ============================================================================
 
+
 class NotificationLog(models.Model):
     """Log detallado de intentos de envío."""
+
     notification = models.ForeignKey(
         Notification,
         on_delete=models.CASCADE,
