@@ -120,3 +120,17 @@ codificación incompatible e importaciones anticipadas de modelos, no tenía
 migración inicial, y sus pruebas apuntaban a imports/mocks obsoletos. Celery
 no cargaba sus settings y utilizaba `os.setenv`, que no existe. Se repararon
 estos bloqueos y se verificó despacho eager sin broker externo.
+
+## Auditoría posterior (Fase 1.1)
+
+El contrato de estados, cancelación y resultados ambiguos está en
+[reliability.md](reliability.md). El procedimiento para revisar esquemas y
+UUID duplicados está en [existing-installations.md](existing-installations.md).
+La preparación y los casos PostgreSQL pendientes están en
+[postgres-tests.md](postgres-tests.md).
+
+La ejecución actual de Fase 1.1 arroja 52 pruebas aprobadas, 3 fallos de rollback
+que requieren la decisión de comportamiento transaccional y 5 casos PostgreSQL
+omitidos en SQLite. El intento de esos cinco casos con postgres_test falló al
+abrir la conexión local, antes de ejecutar pruebas. Las 33 pruebas de Fase 1
+se mantienen. No se considera lista para publicar mientras falle rollback.
