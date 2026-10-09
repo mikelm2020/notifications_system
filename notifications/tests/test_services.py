@@ -26,9 +26,7 @@ class NotificationServiceTest(TestCase):
     def setUp(self):
         """Configuración inicial para tests"""
         User = get_user_model()
-        self.user = User.objects.create_user(
-            username="testuser", email="test@example.com"
-        )
+        self.user = User.objects.create_user(username="testuser", email="test@example.com")
 
         # Crear categoría
         self.category = NotificationCategory.objects.create(

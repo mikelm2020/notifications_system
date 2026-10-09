@@ -1,4 +1,5 @@
 """Entorno local y de pruebas sin servicios ni credenciales externos."""
+
 from .settings import *  # noqa: F403
 
 SECRET_KEY = "local-development-only"

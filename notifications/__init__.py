@@ -97,6 +97,10 @@ def __getattr__(name):
 
 
 __all__ = [
-    "notifications_config", "NotificationData", "NotificationService",
-    "send_notification", "send_notification_async", "__version__",
+    "notifications_config",
+    "NotificationData",
+    "NotificationService",
+    "send_notification",
+    "send_notification_async",
+    "__version__",
 ]
