@@ -1,5 +1,11 @@
 # Desarrollo local (Ubuntu / WSL2)
 
+> Nota de versión: este documento conserva resultados históricos de las Fases 1 y 1.1.
+> La decisión transaccional y los fallos de rollback aquí descritos se resolvieron
+> en Fase 1.2; PostgreSQL y CI se validaron después. Para el comportamiento actual,
+> consultar [despacho transaccional](transactional-dispatch.md),
+> [pruebas PostgreSQL](postgres-tests.md) y [CI](ci.md).
+
 Requisitos: Python 3.12 con venv y Poetry 2.x disponibles. No se requieren
 PostgreSQL, Redis, Docker ni credenciales para ejecutar esta suite.
 
