@@ -10,12 +10,16 @@ import logging
 import uuid as uuid_lib
 from typing import Any, Dict, List, Optional
 
+from django.db import transaction
+from django.db.models import Q as models_Q
+
 from notifications.conf import notifications_config
 from notifications.dtos.notification_data import NotificationData
 from notifications.exceptions import (
     NoChannelsConfiguredError,
     NotificationTypeNotFoundError,
     TemplateNotFoundError,
+    is_ambiguous_delivery_error,
 )
 from notifications.factories.channel_factory import NotificationChannelFactory
 from notifications.models import (
@@ -75,7 +79,33 @@ class NotificationService:
         self.channel_repo = channel_repo
         self.channel_factory = channel_factory
 
-    def create_and_send_notification(
+    def create_and_send_notification(self, notification_data, channels=None, *, enqueue=False):
+        """Persist all deliveries atomically; dispatch only after the outer commit."""
+        connection = transaction.get_connection()
+        if not connection.get_autocommit() and not connection.in_atomic_block:
+            raise RuntimeError("Manual transactions are unsupported; use transaction.atomic()")
+        deferred = enqueue or transaction.get_connection().in_atomic_block
+        with transaction.atomic():
+            notifications = self._create_and_queue_notification(notification_data, channels)
+            for notification in notifications:
+                if deferred:
+                    transaction.on_commit(lambda pk=notification.pk: self._publish_dispatch(pk))
+                else:
+                    transaction.on_commit(
+                        lambda n=notification: self._send_notification(n, n.context_data)
+                    )
+        return notifications
+
+    @staticmethod
+    def _publish_dispatch(pk):
+        from notifications.tasks import dispatch_notification
+
+        try:
+            dispatch_notification.delay(pk)
+        except Exception:
+            logger.exception("Broker unavailable; delivery %s remains recoverable", pk)
+
+    def _create_and_queue_notification(
         self,
         notification_data: NotificationData,
         channels: Optional[List[str]] = None,
@@ -98,15 +128,34 @@ class NotificationService:
         """
         # Emitir signal pre-create
         from notifications.signals import notification_pre_create
+
         notification_pre_create.send(
             sender=self.__class__,
             notification_data=notification_data,
         )
 
         # Paso 1: Validar tipo de notificación
-        notification_type = self._validate_notification_type(
-            notification_data.event_code
+        notification_type = self._validate_notification_type(notification_data.event_code)
+
+        # A retry must retain the original delivery set, even if preferences changed.
+        existing = (
+            list(
+                Notification.objects.filter(uuid=notification_data.uuid).select_related(
+                    "channel_id",
+                    "notification_type_id",
+                )
+            )
+            if notification_data.uuid
+            else []
         )
+        if existing:
+            if any(
+                n.notification_type_id_id != notification_type.pk
+                or n.user_id_id != notification_data.user_id
+                for n in existing
+            ):
+                raise ValueError("Notification UUID already belongs to another event or user")
+            return existing
 
         # Paso 2: Obtener canales
         if channels:
@@ -129,17 +178,13 @@ class NotificationService:
 
         # Emitir signal post-create
         from notifications.signals import notification_post_create
+
         for notification in notifications:
             notification_post_create.send(
                 sender=self.__class__,
                 notification=notification,
                 notification_data=notification_data,
             )
-
-        # Paso 5: Enviar notificaciones (si no están programadas)
-        for notification in notifications:
-            if not notification.scheduled_for:
-                self._send_notification(notification, notification_data.context)
 
         return notifications
 
@@ -156,9 +201,7 @@ class NotificationService:
         self, notification_type: NotificationType
     ) -> List[NotificationChannel]:
         """Obtiene los canales configurados para el tipo."""
-        channels = self.notification_type_repo.get_channels_for_type(
-            notification_type.id
-        )
+        channels = self.notification_type_repo.get_channels_for_type(notification_type.id)
 
         # Filtrar solo canales habilitados en configuración
         enabled_channels = notifications_config.get_enabled_channels()
@@ -184,14 +227,18 @@ class NotificationService:
     ) -> List[NotificationChannel]:
         """Filtra canales según preferencias del usuario."""
         # Obtener preferencias deshabilitadas
-        disabled_prefs = UserNotificationPreference.objects.filter(
-            user_id=user_id,
-            is_enabled=False,
-        ).filter(
-            # Preferencia global del canal O específica del tipo
-            models_Q(notification_type__isnull=True) |
-            models_Q(notification_type=notification_type)
-        ).values_list("channel_id", flat=True)
+        disabled_prefs = (
+            UserNotificationPreference.objects.filter(
+                user_id=user_id,
+                is_enabled=False,
+            )
+            .filter(
+                # Preferencia global del canal O específica del tipo
+                models_Q(notification_type__isnull=True)
+                | models_Q(notification_type=notification_type)
+            )
+            .values_list("channel_id", flat=True)
+        )
 
         # Filtrar canales no deshabilitados
         return [ch for ch in channels if ch.id not in disabled_prefs]
@@ -207,24 +254,49 @@ class NotificationService:
         notification_uuid = notification_data.uuid or str(uuid_lib.uuid4())
 
         for channel in channels:
-            notification = Notification(
-                uuid=notification_uuid,
-                notification_type_id=notification_type,
-                user_id_id=notification_data.user_id,
-                channel_id=channel,
-                status=Notification.Status.PENDING,
-                context_data=notification_data.context,
-                scheduled_for=notification_data.scheduled_for,
+            saved_notification = self.notification_repo.get_or_create_delivery(
+                notification_uuid,
+                channel,
+                defaults={
+                    "notification_type_id": notification_type,
+                    "user_id_id": notification_data.user_id,
+                    "status": Notification.Status.QUEUED,
+                    "context_data": notification_data.context,
+                    "scheduled_for": notification_data.scheduled_for,
+                },
             )
-            saved_notification = self.notification_repo.save_record(notification)
+            if (
+                saved_notification.notification_type_id_id != notification_type.pk
+                or saved_notification.user_id_id != notification_data.user_id
+            ):
+                raise ValueError("Notification UUID already belongs to another event or user")
             notifications.append(saved_notification)
 
         return notifications
 
     def _send_notification(self, notification: Notification, context: Dict[str, Any]):
         """Envía una notificación usando la estrategia apropiada."""
+        if transaction.get_connection().in_atomic_block:
+            # Persist intent in the caller's transaction; rollback discards both.
+            Notification.objects.filter(
+                pk=notification.pk,
+                status=Notification.Status.PENDING,
+                failed_permanently_at__isnull=True,
+            ).update(status=Notification.Status.QUEUED)
+            transaction.on_commit(lambda: self._publish_dispatch(notification.pk))
+            return False
+        if not transaction.get_connection().get_autocommit():
+            raise RuntimeError("Dispatch requires autocommit")
         from notifications.signals import notification_post_send, notification_pre_send
 
+        if not self._recipient_enabled(notification):
+            self.notification_repo.cancel(notification, "User disabled this channel")
+            return False
+        if not self.notification_repo.claim_for_send(notification):
+            return False
+
+        context = notification.context_data or context
+        strategy = None
         try:
             # Crear estrategia
             strategy = self.channel_factory.create(
@@ -234,8 +306,7 @@ class NotificationService:
 
             # Obtener template
             template = self._get_template_for_channel(
-                notification.notification_type_id,
-                notification.channel_id.name
+                notification.notification_type_id, notification.channel_id.name
             )
 
             # Preparar contenido
@@ -248,34 +319,70 @@ class NotificationService:
                 content=content,
             )
 
-            # Actualizar estado a "enviando"
-            notification.status = Notification.Status.SENDING
-            notification.save(update_fields=["status", "updated_at"])
-
-            # Enviar
+            # Recheck after pre-send hooks. No row lock is held during provider I/O.
+            if not self._recipient_enabled(notification):
+                self.notification_repo.cancel(notification, "User disabled this channel")
+                return False
+            if not self.notification_repo.begin_dispatch(notification):
+                return False
             success = strategy.send(notification, content)
 
-            # Actualizar estado
+        except Exception as e:
+            logger.exception("Error procesando notificación %s", notification.uuid)
+            notification.error_message = str(e)
+            if notification.dispatch_started_at is not None and is_ambiguous_delivery_error(e):
+                self.notification_repo.mark_as_unknown(notification)
+            else:
+                self.notification_repo.mark_as_failed(notification)
+            success = False
+
+        else:
+            # If persistence fails after provider acceptance, leave SENDING for review.
+            # Automatically retrying that unknown outcome could send twice.
             if success:
                 self.notification_repo.mark_as_sent(notification)
+            elif notification.error_code == "DELIVERY_UNKNOWN":
+                self.notification_repo.mark_as_unknown(notification)
             else:
                 self.notification_repo.mark_as_failed(notification)
 
-            # Emitir signal post-send
-            notification_post_send.send(
-                sender=strategy.__class__,
+        if (
+            notification.status == Notification.Status.FAILED
+            and notification.retry_count >= notifications_config.max_retries
+        ):
+            self.finalize_failure(notification)
+
+        # Observer failures must never turn a confirmed send into a retriable failure.
+        notification_post_send.send_robust(
+            sender=strategy.__class__ if strategy is not None else self.__class__,
+            notification=notification,
+            success=success,
+        )
+        return True
+
+    def _recipient_enabled(self, notification):
+        if not notification.user_id_id:
+            return True
+        return bool(
+            self._filter_by_user_preferences(
+                notification.user_id_id,
+                notification.notification_type_id,
+                [notification.channel_id],
+            )
+        )
+
+    def finalize_failure(self, notification, notification_data=None):
+        if self.notification_repo.finalize_failure(notification):
+            from notifications.signals import notification_failed_permanently
+
+            notification_failed_permanently.send_robust(
+                sender=self.__class__,
                 notification=notification,
-                success=success,
+                notification_data=notification_data,
+                error=RuntimeError(notification.error_message or "Retry budget exhausted"),
             )
 
-        except Exception as e:
-            logger.error(f"Error procesando notificación {notification.uuid}: {str(e)}")
-            notification.error_message = str(e)
-            self.notification_repo.mark_as_failed(notification)
-
-    def _get_template_for_channel(
-        self, notification_type: NotificationType, channel_name: str
-    ):
+    def _get_template_for_channel(self, notification_type: NotificationType, channel_name: str):
         """Obtiene el template apropiado según el canal."""
         channel_name_lower = channel_name.lower()
         template_model = CHANNEL_TEMPLATE_MAP.get(channel_name_lower)
@@ -293,9 +400,7 @@ class NotificationService:
 
         return template
 
-    def get_user_notifications(
-        self, user_id: int, unread_only: bool = False
-    ) -> List[Notification]:
+    def get_user_notifications(self, user_id: int, unread_only: bool = False) -> List[Notification]:
         """Obtiene notificaciones de un usuario."""
         if unread_only:
             return self.notification_repo.get_user_notifications(user_id, is_read=False)
@@ -308,7 +413,3 @@ class NotificationService:
             return False
         self.notification_repo.mark_as_read(notification)
         return True
-
-
-# Importar Q aquí para evitar problemas de import circular
-from django.db.models import Q as models_Q

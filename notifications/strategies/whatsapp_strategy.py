@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WhatsAppContent:
     """Contenido para notificación WhatsApp."""
+
     message: str
     to_number: str
     template_sid: Optional[str] = None
@@ -37,9 +38,7 @@ class WhatsAppChannelStrategy(NotificationChannelStrategy):
     provider_class = TwilioProvider
 
     def prepare_content(
-        self,
-        template: WhatsAppTemplate,
-        context: Dict[str, Any]
+        self, template: WhatsAppTemplate, context: Dict[str, Any]
     ) -> WhatsAppContent:
         """
         Prepara el contenido de WhatsApp.
@@ -83,6 +82,7 @@ class WhatsAppChannelStrategy(NotificationChannelStrategy):
         if notification.user_id:
             try:
                 from notifications.models import UserExternalAccount
+
                 account = UserExternalAccount.objects.filter(
                     user=notification.user_id,
                     account_type="whatsapp",
@@ -109,8 +109,7 @@ class WhatsAppChannelStrategy(NotificationChannelStrategy):
         try:
             provider = self.provider
             recipient = content.to_number or self.get_recipient(
-                notification,
-                notification.context_data or {}
+                notification, notification.context_data or {}
             )
 
             if not recipient:
@@ -160,5 +159,5 @@ class WhatsAppChannelStrategy(NotificationChannelStrategy):
 
         except Exception as e:
             logger.error(f"Error enviando WhatsApp {notification.uuid}: {str(e)}")
-            notification.error_message = str(e)
+            self.record_send_error(notification, e)
             return False

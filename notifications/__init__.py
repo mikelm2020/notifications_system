@@ -16,7 +16,7 @@ Canales soportados:
     - Telegram
     - Webhook
 
-Uso b醩ico:
+Uso b谩sico:
     from notifications import send_notification
 
     send_notification(
@@ -36,12 +36,7 @@ Uso con Celery:
 """
 
 __version__ = "1.0.0"
-__author__ = "Miguel Angel L髉ez Monroy"
-
-# API p鷅lica
-from notifications.conf import notifications_config
-from notifications.dtos.notification_data import NotificationData
-from notifications.services.notification_service import NotificationService
+__author__ = "Miguel Angel L贸pez Monroy"
 
 
 def send_notification(
@@ -52,14 +47,14 @@ def send_notification(
     scheduled_for=None,
 ):
     """
-    Env韆 una notificaci髇 de forma s韓crona.
+    Env铆a una notificaci贸n de forma s铆ncrona.
 
     Args:
-        event_code: C骴igo del tipo de notificaci髇 (ej: "ORDER_CREATED").
+        event_code: C贸digo del tipo de notificaci贸n (ej: "ORDER_CREATED").
         user_id: ID del usuario destinatario (opcional).
         context: Variables de contexto para los templates.
-        channels: Lista de canales espec韋icos (opcional, usa todos si es None).
-        scheduled_for: Datetime para env韔 programado (opcional).
+        channels: Lista de canales espec铆ficos (opcional, usa todos si es None).
+        scheduled_for: Datetime para env铆o programado (opcional).
 
     Returns:
         Lista de objetos Notification creados.
@@ -72,6 +67,9 @@ def send_notification(
             channels=["email"],
         )
     """
+    from notifications.dtos.notification_data import NotificationData
+    from notifications.services.notification_service import NotificationService
+
     notification_data = NotificationData(
         event_code=event_code,
         user_id=user_id,
@@ -83,23 +81,26 @@ def send_notification(
     return service.create_and_send_notification(notification_data, channels=channels)
 
 
-# Exponer tarea de Celery para uso directo
-try:
-    from notifications.tasks import send_notification_async
-except ImportError:
-    send_notification_async = None
+def __getattr__(name):
+    # Django imports the package before its app registry is ready.
+    from importlib import import_module
+
+    exports = {
+        "notifications_config": "notifications.conf",
+        "NotificationData": "notifications.dtos.notification_data",
+        "NotificationService": "notifications.services.notification_service",
+        "send_notification_async": "notifications.tasks",
+    }
+    if name in exports:
+        return getattr(import_module(exports[name]), name)
+    raise AttributeError(name)
 
 
 __all__ = [
-    # Configuraci髇
     "notifications_config",
-    # DTOs
     "NotificationData",
-    # Servicios
     "NotificationService",
-    # Funciones de conveniencia
     "send_notification",
     "send_notification_async",
-    # Versi髇
     "__version__",
 ]

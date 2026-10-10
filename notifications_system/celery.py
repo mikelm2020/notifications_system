@@ -11,14 +11,18 @@ import os
 from celery import Celery
 from celery.schedules import crontab
 
-os.setenv("DJANGO_SETTINGS_MODULE", "notifications_system.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "notifications_system.settings")
 
-app = Celery("your_project")
+app = Celery("notifications_system")
 app.config_from_object("django.conf:settings", namespace="CELERY")
 app.autodiscover_tasks()
 
 # Configuración de tareas periódicas
 app.conf.beat_schedule = {
+    "recover-queued-notifications": {
+        "task": "notifications.tasks.recover_queued_notifications",
+        "schedule": crontab(minute="*"),
+    },
     "retry-failed-notifications": {
         "task": "notifications.tasks.retry_failed_notifications",
         "schedule": crontab(minute="*/15"),  # Cada 15 minutos

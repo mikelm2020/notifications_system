@@ -6,9 +6,8 @@
 push_web_strategy.py - Estrategia para Web Push Notifications.
 """
 
-import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from notifications.models import DeviceToken, Notification, PushTemplate
 from notifications.providers.webpush import WebPushProvider
@@ -24,11 +23,7 @@ class PushWebChannelStrategy(NotificationChannelStrategy):
     channel_name = "push_web"
     provider_class = WebPushProvider
 
-    def prepare_content(
-        self,
-        template: PushTemplate,
-        context: Dict[str, Any]
-    ) -> PushContent:
+    def prepare_content(self, template: PushTemplate, context: Dict[str, Any]) -> PushContent:
         """
         Prepara el contenido del Web Push.
 
@@ -81,13 +76,15 @@ class PushWebChannelStrategy(NotificationChannelStrategy):
         subscriptions = []
         for token in tokens:
             if token.endpoint and token.p256dh_key and token.auth_key:
-                subscriptions.append({
-                    "endpoint": token.endpoint,
-                    "keys": {
-                        "p256dh": token.p256dh_key,
-                        "auth": token.auth_key,
+                subscriptions.append(
+                    {
+                        "endpoint": token.endpoint,
+                        "keys": {
+                            "p256dh": token.p256dh_key,
+                            "auth": token.auth_key,
+                        },
                     }
-                })
+                )
 
         return subscriptions
 
@@ -134,6 +131,8 @@ class PushWebChannelStrategy(NotificationChannelStrategy):
                 if response.success:
                     success_count += 1
                 else:
+                    if notification.error_code != "DELIVERY_UNKNOWN":
+                        self.update_notification_from_response(notification, response)
                     # Desactivar subscription si expiró
                     if response.error_code in ["SUBSCRIPTION_EXPIRED", "SUBSCRIPTION_NOT_FOUND"]:
                         self._deactivate_subscription(subscription["endpoint"])
@@ -153,7 +152,7 @@ class PushWebChannelStrategy(NotificationChannelStrategy):
 
         except Exception as e:
             logger.error(f"Error enviando Web Push {notification.uuid}: {str(e)}")
-            notification.error_message = str(e)
+            self.record_send_error(notification, e)
             return False
 
     def _deactivate_subscription(self, endpoint: str):

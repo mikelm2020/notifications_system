@@ -16,8 +16,8 @@ from typing import Any, Dict, Optional
 
 from notifications.conf import notifications_config
 from notifications.exceptions import (
-    ProviderConnectionError,
     ProviderNotConfiguredError,
+    is_ambiguous_delivery_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ProviderResponse:
     """Respuesta estándar de un proveedor."""
+
     success: bool
     message_id: Optional[str] = None
     error_message: Optional[str] = None
@@ -69,15 +70,9 @@ class BaseProvider(ABC):
         Raises:
             ProviderNotConfiguredError: Si faltan campos requeridos.
         """
-        missing = [
-            field for field in self.required_config_fields
-            if not self._config.get(field)
-        ]
+        missing = [field for field in self.required_config_fields if not self._config.get(field)]
         if missing:
-            raise ProviderNotConfiguredError(
-                self.provider_name,
-                missing_fields=missing
-            )
+            raise ProviderNotConfiguredError(self.provider_name, missing_fields=missing)
         return True
 
     @property
@@ -96,12 +91,7 @@ class BaseProvider(ABC):
         pass
 
     @abstractmethod
-    def send(
-        self,
-        recipient: str,
-        content: Dict[str, Any],
-        **kwargs
-    ) -> ProviderResponse:
+    def send(self, recipient: str, content: Dict[str, Any], **kwargs) -> ProviderResponse:
         """
         Envía un mensaje a través del proveedor.
 
@@ -148,7 +138,9 @@ class BaseProvider(ABC):
         return ProviderResponse(
             success=False,
             error_message=str(error),
-            error_code=type(error).__name__,
+            error_code=(
+                "DELIVERY_UNKNOWN" if is_ambiguous_delivery_error(error) else type(error).__name__
+            ),
         )
 
 
@@ -169,12 +161,7 @@ class MockProvider(BaseProvider):
     def get_client(self) -> Any:
         return None
 
-    def send(
-        self,
-        recipient: str,
-        content: Dict[str, Any],
-        **kwargs
-    ) -> ProviderResponse:
+    def send(self, recipient: str, content: Dict[str, Any], **kwargs) -> ProviderResponse:
         """Simula envío y guarda el mensaje."""
         message = {
             "recipient": recipient,

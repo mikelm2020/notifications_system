@@ -10,7 +10,7 @@ Tests unitarios para el servicio de notificaciones
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TransactionTestCase
 
 from notifications.models import (
     EmailTemplate,
@@ -22,13 +22,11 @@ from notifications.models import (
 )
 
 
-class NotificationServiceTest(TestCase):
+class NotificationServiceTest(TransactionTestCase):
     def setUp(self):
         """Configuración inicial para tests"""
         User = get_user_model()
-        self.user = User.objects.create_user(
-            username="testuser", email="test@example.com"
-        )
+        self.user = User.objects.create_user(username="testuser", email="test@example.com")
 
         # Crear categoría
         self.category = NotificationCategory.objects.create(
@@ -58,10 +56,10 @@ class NotificationServiceTest(TestCase):
             template_text="Hola {{ user_name }}, esto es una prueba.",
         )
 
-    @patch("notifications.services.send_mail")
+    @patch("notifications.providers.smtp.EmailMultiAlternatives.send")
     def test_send_email_notification(self, mock_send_mail):
         """Test de envío de notificación por email"""
-        from notifications.services import EmailNotificationService
+        from notifications.services.email_service import EmailNotificationService
 
         mock_send_mail.return_value = 1
 
@@ -80,7 +78,7 @@ class NotificationServiceTest(TestCase):
 
     def test_notification_repository_methods(self):
         """Test de métodos del repositorio"""
-        from notifications.repositories import NotificationRepository
+        from notifications.repositories.notification_repository import NotificationRepository
 
         # Crear notificación
         notification = Notification.objects.create(
@@ -95,6 +93,8 @@ class NotificationServiceTest(TestCase):
         self.assertEqual(found.id, notification.id)
 
         # Test mark_as_sent
+        self.assertTrue(NotificationRepository.claim_for_send(notification))
+        self.assertTrue(NotificationRepository.begin_dispatch(notification))
         NotificationRepository.mark_as_sent(notification)
         notification.refresh_from_db()
         self.assertEqual(notification.status, Notification.Status.SENT)

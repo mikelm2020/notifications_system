@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SMSContent:
     """Contenido para notificación SMS."""
+
     message: str
     to_number: str
 
@@ -30,11 +31,7 @@ class SMSChannelStrategy(NotificationChannelStrategy):
     channel_name = "sms"
     provider_class = TwilioProvider
 
-    def prepare_content(
-        self,
-        template: SMSTemplate,
-        context: Dict[str, Any]
-    ) -> SMSContent:
+    def prepare_content(self, template: SMSTemplate, context: Dict[str, Any]) -> SMSContent:
         """
         Prepara el contenido del SMS.
 
@@ -50,8 +47,7 @@ class SMSChannelStrategy(NotificationChannelStrategy):
         # Truncar a 160 caracteres si es necesario
         if len(message) > 160:
             logger.warning(
-                f"SMS truncado de {len(message)} a 160 caracteres "
-                f"para template {template.id}"
+                f"SMS truncado de {len(message)} a 160 caracteres " f"para template {template.id}"
             )
             message = message[:157] + "..."
 
@@ -72,6 +68,7 @@ class SMSChannelStrategy(NotificationChannelStrategy):
         if notification.user_id:
             try:
                 from notifications.models import UserExternalAccount
+
                 account = UserExternalAccount.objects.filter(
                     user=notification.user_id,
                     account_type="whatsapp",  # WhatsApp tiene el teléfono
@@ -98,8 +95,7 @@ class SMSChannelStrategy(NotificationChannelStrategy):
         try:
             provider = self.provider
             recipient = content.to_number or self.get_recipient(
-                notification,
-                notification.context_data or {}
+                notification, notification.context_data or {}
             )
 
             if not recipient:
@@ -130,5 +126,5 @@ class SMSChannelStrategy(NotificationChannelStrategy):
 
         except Exception as e:
             logger.error(f"Error enviando SMS {notification.uuid}: {str(e)}")
-            notification.error_message = str(e)
+            self.record_send_error(notification, e)
             return False

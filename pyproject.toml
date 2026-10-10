@@ -23,6 +23,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+postgres-tests = ["psycopg[binary] (>=3.2,<4.0)"]
 # Canales individuales
 sms = ["twilio (>=9.0.0,<10.0.0)"]
 whatsapp = ["twilio (>=9.0.0,<10.0.0)"]
@@ -68,4 +69,9 @@ target-version = ["py312"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+[tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "notifications_system.local"
+python_files = ["test_*.py"]

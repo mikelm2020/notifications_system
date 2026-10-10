@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional, Type
 
 from django.template import Context, Template
 
+from notifications.exceptions import is_ambiguous_delivery_error
 from notifications.models import Notification
 from notifications.providers.base import BaseProvider, ProviderResponse
 
@@ -24,6 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class ChannelContent:
     """Contenido preparado para envío por un canal."""
+
     data: Dict[str, Any]
     recipient: str
     metadata: Optional[Dict[str, Any]] = None
@@ -118,7 +120,7 @@ class NotificationChannelStrategy(ABC):
         notification: Notification,
         success: bool,
         response: Optional[ProviderResponse] = None,
-        error: Optional[str] = None
+        error: Optional[str] = None,
     ):
         """
         Registra el resultado del envío.
@@ -141,9 +143,7 @@ class NotificationChannelStrategy(ABC):
             )
 
     def update_notification_from_response(
-        self,
-        notification: Notification,
-        response: ProviderResponse
+        self, notification: Notification, response: ProviderResponse
     ):
         """
         Actualiza la notificación con datos de la respuesta del proveedor.
@@ -158,3 +158,9 @@ class NotificationChannelStrategy(ABC):
         if not response.success:
             notification.error_message = response.error_message
             notification.error_code = response.error_code
+
+    def record_send_error(self, notification: Notification, error: Exception):
+        notification.error_message = str(error)
+        notification.error_code = (
+            "DELIVERY_UNKNOWN" if is_ambiguous_delivery_error(error) else type(error).__name__
+        )
