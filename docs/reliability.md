@@ -1,5 +1,11 @@
 # Fiabilidad: Fase 1.1
 
+> Nota de versión: este documento conserva resultados históricos de las Fases 1 y 1.1.
+> La decisión transaccional y los fallos de rollback aquí descritos se resolvieron
+> en Fase 1.2; PostgreSQL y CI se validaron después. Para el comportamiento actual,
+> consultar [despacho transaccional](transactional-dispatch.md),
+> [pruebas PostgreSQL](postgres-tests.md) y [CI](ci.md).
+
 ## Transiciones soportadas
 
 Las operaciones del repositorio hacen UPDATE condicionado por estado. No
