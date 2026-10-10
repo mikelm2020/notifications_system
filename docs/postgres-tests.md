@@ -51,3 +51,6 @@ rechazo de publicación de intención sin persistir dentro de atomic.
 Los proveedores son fakes/mocks, incluso en PostgreSQL. Celery eager usa
 memoria; no se necesita Redis para estas pruebas. Worker/broker reales,
 Repeatable Read/Serializable y fallos de red distribuidos siguen sin validarse.
+
+CI ejecuta estas mismas comprobaciones en cada PR y push a main; ver
+[ci.md](ci.md) para los comandos completos y el alcance de Ruff.

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  postgres-tests:
+    name: Python 3.12 / PostgreSQL 16
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DJANGO_SETTINGS_MODULE: notifications_system.postgres_test
+      NOTIFICATIONS_PG_HOST: 127.0.0.1
+      NOTIFICATIONS_PG_PORT: '55432'
+      NOTIFICATIONS_PG_USER: notifications_test
+      NOTIFICATIONS_PG_PASSWORD: local-test-only
+      POETRY_VIRTUALENVS_IN_PROJECT: 'true'
+      POETRY_NO_INTERACTION: '1'
+      PIP_DISABLE_PIP_VERSION_CHECK: '1'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: notifications_test
+          POSTGRES_PASSWORD: local-test-only
+          POSTGRES_DB: postgres
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U notifications_test -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install Poetry
+        run: python -m pip install 'poetry==2.4.1'
+      - name: Validate lock and install test dependencies
+        run: |
+          poetry check --lock
+          poetry install --extras 'dev postgres-tests' --no-root
+      - name: Ruff (reliability scope)
+        run: xargs -d '\n' -r poetry run ruff check -- < .github/ruff-files.txt
+      - name: Django checks
+        run: poetry run python manage.py check
+      - name: Check for missing migrations
+        run: poetry run python manage.py makemigrations --check --dry-run
+      - name: Full suite on PostgreSQL
+        timeout-minutes: 5
+        run: poetry run pytest -q --junitxml=test-results.xml
