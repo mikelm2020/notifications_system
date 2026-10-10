@@ -10,7 +10,7 @@ Tests unitarios para el servicio de notificaciones
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TransactionTestCase
 
 from notifications.models import (
     EmailTemplate,
@@ -22,7 +22,7 @@ from notifications.models import (
 )
 
 
-class NotificationServiceTest(TestCase):
+class NotificationServiceTest(TransactionTestCase):
     def setUp(self):
         """Configuración inicial para tests"""
         User = get_user_model()

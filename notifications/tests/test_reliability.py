@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from celery.exceptions import Retry
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TransactionTestCase
 from django.utils import timezone
 
 from notifications.conf import notifications_config
@@ -28,7 +28,7 @@ from notifications.tasks import (
 )
 
 
-class ReliabilityTests(TestCase):
+class ReliabilityTests(TransactionTestCase):
     def setUp(self):
         self.user = get_user_model().objects.create_user(
             username="reliable", email="a@example.test"
@@ -179,7 +179,7 @@ class ReliabilityTests(TestCase):
     def test_scheduled_service_does_not_send_immediately(self):
         data = NotificationData(**self.data, scheduled_for=timezone.now() + timedelta(hours=1))
         n = NotificationService().create_and_send_notification(data)[0]
-        self.assertEqual(n.status, Notification.Status.PENDING)
+        self.assertEqual(n.status, Notification.Status.QUEUED)
         self.strategy.send.assert_not_called()
 
     def test_channel_task_reports_failure(self):
