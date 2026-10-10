@@ -11,7 +11,9 @@ import uuid
 from datetime import timedelta
 from typing import Dict, List, Optional
 
-from celery import shared_task
+from celery import Task, shared_task
+from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from notifications.conf import notifications_config
@@ -21,12 +23,25 @@ from notifications.models import Notification
 logger = logging.getLogger(__name__)
 
 
+class CommittedCreationTask(Task):
+    """Do not publish unpersisted business intent from an open transaction."""
+
+    def apply_async(self, args=None, kwargs=None, **options):
+        connection = transaction.get_connection()
+        if connection.in_atomic_block or not connection.get_autocommit():
+            raise RuntimeError(
+                "Use AsyncNotificationService inside business transactions to persist intent"
+            )
+        return super().apply_async(args=args, kwargs=kwargs, **options)
+
+
 def _delivery_uuid(task_id):
     return str(uuid.uuid5(uuid.NAMESPACE_URL, task_id)) if task_id else str(uuid.uuid4())
 
 
 @shared_task(
     bind=True,
+    base=CommittedCreationTask,
     max_retries=None,  # Usamos configuración
     default_retry_delay=None,
 )
@@ -103,7 +118,7 @@ def send_notification_async(self, notification_data_dict: Dict):
             raise
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, base=CommittedCreationTask)
 def send_to_channel_async(
     self,
     event_code: str,
@@ -162,7 +177,7 @@ def send_to_channel_async(
         return {"success": False, "error": str(e)}
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, base=CommittedCreationTask)
 def send_email_async(
     self,
     event_code: str,
@@ -182,7 +197,7 @@ def send_email_async(
     )
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, base=CommittedCreationTask)
 def send_sms_async(
     self,
     event_code: str,
@@ -202,7 +217,7 @@ def send_sms_async(
     )
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, base=CommittedCreationTask)
 def send_push_async(
     self,
     event_code: str,
@@ -215,7 +230,7 @@ def send_push_async(
     )
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, base=CommittedCreationTask)
 def send_whatsapp_async(
     self,
     event_code: str,
@@ -308,7 +323,7 @@ def process_scheduled_notifications():
     now = timezone.now()
 
     scheduled_notifications = Notification.objects.filter(
-        status=Notification.Status.PENDING,
+        status__in=[Notification.Status.PENDING, Notification.Status.QUEUED],
         scheduled_for__lte=now,
         scheduled_for__isnull=False,
     ).select_related("notification_type_id", "channel_id")
@@ -360,7 +375,7 @@ def cleanup_old_notifications():
     }
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, base=CommittedCreationTask)
 def send_batch_notifications(self, notification_data_list: List[Dict]):
     """
     Tarea para enviar notificaciones en batch.
@@ -434,3 +449,34 @@ def deactivate_expired_device_tokens():
     logger.info(f"Desactivados {count} tokens de dispositivo expirados")
 
     return {"deactivated": count}
+
+
+@shared_task
+def dispatch_notification(notification_id):
+    """Deliver a persisted intent using the same atomic claim as recovery."""
+    from notifications.services.notification_service import NotificationService
+
+    notification = (
+        Notification.objects.filter(pk=notification_id)
+        .select_related("notification_type_id", "channel_id")
+        .first()
+    )
+    if notification is None:
+        return False
+    return NotificationService()._send_notification(notification, notification.context_data)
+
+
+@shared_task
+def recover_queued_notifications():
+    """Scan committed intents; provider I/O happens without locks or transactions."""
+    ids = Notification.objects.filter(
+        status=Notification.Status.QUEUED,
+        failed_permanently_at__isnull=True,
+    ).filter(Q(scheduled_for__isnull=True) | Q(scheduled_for__lte=timezone.now()))
+    processed = 0
+    for pk in ids.values_list("pk", flat=True).iterator(chunk_size=100):
+        try:
+            processed += bool(dispatch_notification.run(pk))
+        except Exception:
+            logger.exception("Recovery failed for notification %s", pk)
+    return {"processed": processed}

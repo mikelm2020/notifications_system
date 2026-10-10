@@ -10,6 +10,7 @@ import logging
 import uuid as uuid_lib
 from typing import Any, Dict, List, Optional
 
+from django.db import transaction
 from django.db.models import Q as models_Q
 
 from notifications.conf import notifications_config
@@ -78,7 +79,33 @@ class NotificationService:
         self.channel_repo = channel_repo
         self.channel_factory = channel_factory
 
-    def create_and_send_notification(
+    def create_and_send_notification(self, notification_data, channels=None, *, enqueue=False):
+        """Persist all deliveries atomically; dispatch only after the outer commit."""
+        connection = transaction.get_connection()
+        if not connection.get_autocommit() and not connection.in_atomic_block:
+            raise RuntimeError("Manual transactions are unsupported; use transaction.atomic()")
+        deferred = enqueue or transaction.get_connection().in_atomic_block
+        with transaction.atomic():
+            notifications = self._create_and_queue_notification(notification_data, channels)
+            for notification in notifications:
+                if deferred:
+                    transaction.on_commit(lambda pk=notification.pk: self._publish_dispatch(pk))
+                else:
+                    transaction.on_commit(
+                        lambda n=notification: self._send_notification(n, n.context_data)
+                    )
+        return notifications
+
+    @staticmethod
+    def _publish_dispatch(pk):
+        from notifications.tasks import dispatch_notification
+
+        try:
+            dispatch_notification.delay(pk)
+        except Exception:
+            logger.exception("Broker unavailable; delivery %s remains recoverable", pk)
+
+    def _create_and_queue_notification(
         self,
         notification_data: NotificationData,
         channels: Optional[List[str]] = None,
@@ -128,9 +155,6 @@ class NotificationService:
                 for n in existing
             ):
                 raise ValueError("Notification UUID already belongs to another event or user")
-            for notification in existing:
-                if not notification.scheduled_for:
-                    self._send_notification(notification, notification.context_data)
             return existing
 
         # Paso 2: Obtener canales
@@ -161,11 +185,6 @@ class NotificationService:
                 notification=notification,
                 notification_data=notification_data,
             )
-
-        # Paso 5: Enviar notificaciones (si no están programadas)
-        for notification in notifications:
-            if not notification.scheduled_for:
-                self._send_notification(notification, notification_data.context)
 
         return notifications
 
@@ -241,7 +260,7 @@ class NotificationService:
                 defaults={
                     "notification_type_id": notification_type,
                     "user_id_id": notification_data.user_id,
-                    "status": Notification.Status.PENDING,
+                    "status": Notification.Status.QUEUED,
                     "context_data": notification_data.context,
                     "scheduled_for": notification_data.scheduled_for,
                 },
@@ -257,6 +276,17 @@ class NotificationService:
 
     def _send_notification(self, notification: Notification, context: Dict[str, Any]):
         """Envía una notificación usando la estrategia apropiada."""
+        if transaction.get_connection().in_atomic_block:
+            # Persist intent in the caller's transaction; rollback discards both.
+            Notification.objects.filter(
+                pk=notification.pk,
+                status=Notification.Status.PENDING,
+                failed_permanently_at__isnull=True,
+            ).update(status=Notification.Status.QUEUED)
+            transaction.on_commit(lambda: self._publish_dispatch(notification.pk))
+            return False
+        if not transaction.get_connection().get_autocommit():
+            raise RuntimeError("Dispatch requires autocommit")
         from notifications.signals import notification_post_send, notification_pre_send
 
         if not self._recipient_enabled(notification):
