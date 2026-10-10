@@ -1,10 +1,11 @@
 # Integración con PostgreSQL
 
-El entorno revisado no tiene psql/postgres/Redis instalados. Docker está
-presente pero su socket rechaza el acceso. No se instalaron servicios ni se
-alteraron bases reales. Se preparó el driver opcional y se intentó ejecutar
-las pruebas: la conexión local no pudo abrirse, antes de crear la base de
-pruebas. No se afirma que las pruebas PostgreSQL pasen.
+Validación Fase 1.2: se inició, con autorización, un contenedor efímero
+postgres:16 sin volúmenes y con puerto 55432 publicado solo en loopback.
+La suite completa se ejecutó sobre PostgreSQL real con proveedores simulados:
+67 pruebas pasaron sin omisiones. SQLite: 62 pasaron y 5 se omitieron por
+requerir PostgreSQL. Las tres pruebas originales de rollback pasaron intactas.
+El servidor se detuvo al terminar. No se instalaron paquetes del sistema.
 
 ```bash
 source .venv/bin/activate
@@ -43,6 +44,9 @@ simultáneas, dos reclamaciones FAILED con un único incremento, creación
 simultánea por UUID/canal, competencia cancelación/inicio del envío y acceso
 con select_for_update durante la llamada al proveedor (sin bloqueo de I/O).
 SQLite no simula estas garantías: esos cinco casos se omiten explícitamente.
+Los nuevos casos de Fase 1.2 verifican commit, pérdida del callback, fallo del
+broker, recuperación persistente, reentrega, recuperación frente a worker y
+rechazo de publicación de intención sin persistir dentro de atomic.
 
 Los proveedores son fakes/mocks, incluso en PostgreSQL. Celery eager usa
 memoria; no se necesita Redis para estas pruebas. Worker/broker reales,
